@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # electron is never imported at runtime by the tests; only its module is
+  # mocked. The binary is 100+ MB of nothing useful here.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6.0.10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run fmt:check
+      - run: pnpm run lint
+      - run: pnpm run typecheck
+      - run: pnpm run test:coverage
+      - run: pnpm audit --audit-level high
+      - if: github.event_name == 'pull_request'
+        # release-please derives versions and the changelog from these messages,
+        # so a non-conventional commit silently costs a release entry.
+        run: pnpm exec commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+
+  test-windows:
+    # node:path behaves differently on Windows (sep, isAbsolute), which is
+    # exactly what the path-confinement logic in this package depends on.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6.0.10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test
+
+  packed-consumer:
+    # Installs the packed tarball into an empty project so the published
+    # dependency set is exercised instead of this repository's devDependencies.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6.0.10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Pack the publishable artifact
+        # npm, not pnpm: pnpm pack has no --ignore-scripts, and prepack would
+        # re-run the check suite the other jobs already cover.
+        run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+      - name: Validate package metadata and type resolution
+        run: |
+          pnpm exec publint "$RUNNER_TEMP"/electron-renderer-protocol-*.tgz --strict
+          pnpm exec attw "$RUNNER_TEMP"/electron-renderer-protocol-*.tgz --profile esm-only
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 18
+      - name: Install it into an empty project
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir consumer && cd consumer
+          npm init -y >/dev/null
+          npm install electron@43
+          npm install "$RUNNER_TEMP"/electron-renderer-protocol-*.tgz
+      - name: The entry point loads and the protocol is constructible
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          cat > probe.mjs <<'EOF'
+          const mod = await import("electron-renderer-protocol");
+          if (typeof mod.createRendererProtocol !== "function") {
+            throw new Error("missing createRendererProtocol export");
+          }
+          if (typeof mod.resolveRendererPath !== "function") {
+            throw new Error("missing resolveRendererPath export");
+          }
+          const renderer = mod.createRendererProtocol({ directory: process.cwd() });
+          if (renderer.url !== "app://bundle/") {
+            throw new Error("unexpected default url: " + renderer.url);
+          }
+          EOF
+          node probe.mjs
+
+  required:
+    # One stable check name for branch protection.
+    if: always()
+    needs: [quality, test-windows, packed-consumer]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every required job succeeded
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          TEST_WINDOWS: ${{ needs.test-windows.result }}
+          PACKED_CONSUMER: ${{ needs.packed-consumer.result }}
+        run: |
+          for result in "$QUALITY" "$TEST_WINDOWS" "$PACKED_CONSUMER"; do
+            test "$result" = success
+          done

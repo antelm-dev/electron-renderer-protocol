@@ -1,0 +1,74 @@
+{
+  "name": "electron-renderer-protocol",
+  "version": "0.1.0",
+  "description": "A hardened custom protocol for serving an Electron renderer bundle, with path-traversal protection, CSP defaults, and SPA fallback.",
+  "keywords": [
+    "csp",
+    "custom-protocol",
+    "electron",
+    "path-traversal",
+    "renderer",
+    "security",
+    "spa",
+    "typescript"
+  ],
+  "homepage": "https://github.com/antelm-dev/electron-renderer-protocol#readme",
+  "bugs": "https://github.com/antelm-dev/electron-renderer-protocol/issues",
+  "license": "MIT",
+  "author": "Adel Terki",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/antelm-dev/electron-renderer-protocol.git"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "lint:commits": "commitlint --from HEAD~1 --to HEAD",
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "check": "pnpm run fmt:check && pnpm run lint && pnpm run typecheck && pnpm run test",
+    "prepack": "pnpm run check && pnpm run build"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@commitlint/cli": "^21.2.1",
+    "@commitlint/config-conventional": "^21.2.0",
+    "@types/node": "^24.10.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "electron": "^43.4.0",
+    "oxfmt": "^0.62.0",
+    "oxlint": "^1.72.0",
+    "publint": "0.3.23",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "electron": ">=20.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "pnpm@9.15.9"
+}

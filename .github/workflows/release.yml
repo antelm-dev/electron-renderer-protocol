@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    # Prereleases may be cut independently of the stable release-please flow.
+    # The tag must point at a commit whose package.json carries the same version.
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable or prerelease tag to publish/retry (for example, v1.0.0-alpha.1)
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          # Configured by release-please-config.json so bump-minor-pre-major
+          # applies; it is not available as an action input.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: >-
+      always() &&
+      (needs.release-please.outputs.released == 'true' ||
+       github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref_type == 'tag'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing / provenance
+    environment: npm
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_type == 'tag' && github.ref_name || needs.release-please.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: pnpm/action-setup@v6.0.10
+      - uses: actions/setup-node@v7
+        with:
+          # npm 11.5.1+ is what speaks trusted publishing; Node 24 ships it.
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          # Release installs should not trust a dependency cache populated by a
+          # less-privileged workflow.
+          package-manager-cache: false
+      - name: Validate tag against package version
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$RELEASE_TAG" != "v$package_version" ]]; then
+            echo "::error title=Release tag mismatch::$RELEASE_TAG does not match package version $package_version"
+            exit 1
+          fi
+
+          # Stable tags are created by release-please. A direct tag push is a
+          # separate escape hatch specifically for prereleases, so it must not
+          # be able to bypass the stable release PR and publish to `latest`.
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" && "$package_version" != *-* ]]; then
+            echo "::error title=Stable tag rejected::Direct tag publishing accepts prerelease versions only; use the release-please PR for stable releases"
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile
+      # `prepack` already runs `check && build` on publish
+      - name: Publish with the appropriate npm dist-tag
+        # The existence check makes a failed workflow safe to retry when npm
+        # accepted the immutable package version before a later step failed.
+        # npm trusted publishing must authorize this repository, release.yml,
+        # the `npm` environment, and the `npm publish` action.
+        run: |
+          package_name="$(node -p "require('./package.json').name")"
+          package_version="$(node -p "require('./package.json').version")"
+          if npm view "$package_name@$package_version" version >/dev/null 2>&1; then
+            echo "::notice title=Already published::$package_name@$package_version is already on npm; skipping the immutable publish"
+            exit 0
+          fi
+
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            npm publish --access public --tag next
+          else
+            npm publish --access public
+          fi
+      - name: Say when `next` needs retiring by hand
+        # A prerelease has to publish under some tag or it would take `latest`,
+        # so `next` outlives the line it was created for: after a stable
+        # release it still points at the last prerelease, and
+        # `npm install …@next` installs something older than `latest`.
+        #
+        # Trusted publishing authenticates `npm publish` only, not
+        # `npm dist-tag`, so moving the tag here would fail after the package
+        # was already published. Printing the command keeps it in front of
+        # whoever cut the release.
+        if: ${{ !contains(env.RELEASE_TAG, '-') }}
+        run: |
+          if npm dist-tag ls electron-renderer-protocol | grep -q '^next:'; then
+            echo "::warning title=Stale next dist-tag::A stable release just shipped and \`next\` still points at a prerelease. Run: npm dist-tag rm electron-renderer-protocol next"
+          fi
