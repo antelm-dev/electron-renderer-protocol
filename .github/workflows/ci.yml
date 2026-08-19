@@ -85,6 +85,20 @@ jobs:
           npm init -y >/dev/null
           npm install electron@43
           npm install "$RUNNER_TEMP"/electron-renderer-protocol-*.tgz
+      - name: Stand in for the Electron runtime module
+        working-directory: ${{ runner.temp }}/consumer
+        # The electron package on npm exports the path to a binary, not the
+        # runtime module, so under plain node it has no named exports at all
+        # and nothing importing them can be loaded. Swapping it for the shape
+        # the real runtime provides is what makes this probe mean anything.
+        run: |
+          cat > node_modules/electron/index.js <<'EOF'
+          // exports.x = ... is the form node's cjs-module-lexer detects; a
+          // single module.exports object literal is not enough for the named
+          // imports in dist/index.js to link.
+          exports.net = { fetch: () => { throw new Error("not reachable outside Electron"); } };
+          exports.protocol = { handle: () => {}, unhandle: () => {} };
+          EOF
       - name: The entry point loads and the protocol is constructible
         working-directory: ${{ runner.temp }}/consumer
         run: |
@@ -100,6 +114,11 @@ jobs:
           if (renderer.url !== "app://bundle/") {
             throw new Error("unexpected default url: " + renderer.url);
           }
+          if (renderer.customScheme.privileges.codeCache !== true) {
+            throw new Error("scheme is not registered for the code cache");
+          }
+          renderer.register();
+          renderer.unregister();
           EOF
           node probe.mjs
 

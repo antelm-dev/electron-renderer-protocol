@@ -1,6 +1,7 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const electron = vi.hoisted(() => ({
@@ -11,9 +12,36 @@ const electron = vi.hoisted(() => ({
     }),
     unhandle: vi.fn(),
   },
+  // Stands in for Chromium's `file:` loader: streams the file back with the
+  // headers the real loader supplies, including a 206 for range requests.
+  net: {
+    fetch: vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
+      const { readFile: read } = await import("node:fs/promises");
+      const { fileURLToPath: toPath } = await import("node:url");
+      const data = await read(toPath(url));
+      const range = new Headers(init?.headers).get("range");
+      if (range) {
+        const partial = data.subarray(0, 4);
+        return new Response(partial, {
+          status: 206,
+          headers: {
+            "content-length": String(partial.byteLength),
+            "content-range": `bytes 0-3/${data.byteLength}`,
+            "content-type": "application/x-chromium-guess",
+          },
+        });
+      }
+      return new Response(data, {
+        headers: {
+          "content-length": String(data.byteLength),
+          "content-type": "application/x-chromium-guess",
+        },
+      });
+    }),
+  },
 }));
 
-vi.mock("electron", () => ({ protocol: electron.protocol }));
+vi.mock("electron", () => ({ net: electron.net, protocol: electron.protocol }));
 
 import { createRendererProtocol, resolveRendererPath } from "../src/index.js";
 
@@ -46,6 +74,11 @@ describe("renderer protocol", () => {
       status: 400,
     });
     expect(resolveRendererPath(directory, "/bad%zz")).toEqual({ ok: false, status: 400 });
+    expect(resolveRendererPath(directory, "/%00secret")).toEqual({ ok: false, status: 400 });
+    expect(resolveRendererPath(directory, String.raw`/assets\app.js`)).toEqual({
+      ok: false,
+      status: 400,
+    });
   });
 
   it("serves assets, falls back for SPA routes, and never falls back for missing files", async () => {
@@ -67,6 +100,59 @@ describe("renderer protocol", () => {
     expect(missing.status).toBe(404);
   });
 
+  it("never reads a file the request could not resolve to", async () => {
+    const renderer = createRendererProtocol({ directory });
+    renderer.register();
+    const handle = electron.handler!;
+
+    await handle(new Request("app://bundle/%2e%2e/secret.txt"));
+    await handle(new Request("app://bundle/assets/missing.js"));
+    await handle(new Request("app://bundle/index.html", { method: "POST" }));
+    expect(electron.net.fetch).not.toHaveBeenCalled();
+  });
+
+  it("serves a directory request from the fallback rather than the directory itself", async () => {
+    const renderer = createRendererProtocol({ directory });
+    renderer.register();
+    const handle = electron.handler!;
+
+    const response = await handle(new Request("app://bundle/assets"));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("<h1>app</h1>");
+  });
+
+  it("keeps the platform's response but decides the content type itself", async () => {
+    const renderer = createRendererProtocol({ directory });
+    renderer.register();
+    const handle = electron.handler!;
+
+    const response = await handle(new Request("app://bundle/assets/app.js"));
+    const source = await readFile(join(directory, "assets", "app.js"));
+    // Content-Length comes from Chromium; the content type does not, so a
+    // sniffed guess can never override the table in this package.
+    expect(response.headers.get("content-length")).toBe(String(source.byteLength));
+    expect(response.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+  });
+
+  it("forwards range requests and passes the partial response through", async () => {
+    const renderer = createRendererProtocol({ directory });
+    renderer.register();
+    const handle = electron.handler!;
+
+    const response = await handle(
+      new Request("app://bundle/assets/app.js", { headers: { range: "bytes=0-3" } }),
+    );
+    expect(electron.net.fetch.mock.calls[0]?.[0]).toBe(
+      pathToFileURL(join(directory, "assets", "app.js")).href,
+    );
+    expect(new Headers(electron.net.fetch.mock.calls[0]?.[1]?.headers).get("range")).toBe(
+      "bytes=0-3",
+    );
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 0-3/18");
+    expect(await response.text()).toBe("cons");
+  });
+
   it("requires the exact app origin and read-only methods", async () => {
     const renderer = createRendererProtocol({ directory });
     renderer.register();
@@ -80,6 +166,8 @@ describe("renderer protocol", () => {
     const head = await handle(new Request("app://bundle/index.html", { method: "HEAD" }));
     expect(head.status).toBe(200);
     expect(await head.text()).toBe("");
+    // HEAD is only useful if it still reports the size of the body it omits.
+    expect(head.headers.get("content-length")).toBe("12");
   });
 
   it("validates scheme, host, and fallback shape", () => {
@@ -114,8 +202,37 @@ describe("renderer protocol", () => {
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
+        codeCache: true,
       },
     });
+  });
+
+  it("answers 404 when the file exists but the platform cannot read it", async () => {
+    const renderer = createRendererProtocol({ directory });
+    renderer.register();
+    const handle = electron.handler!;
+    electron.net.fetch.mockRejectedValueOnce(new Error("EACCES"));
+
+    const response = await handle(new Request("app://bundle/index.html"));
+    expect(response.status).toBe(404);
+  });
+
+  it("registers on a given session instead of the default one", async () => {
+    const partition = {
+      protocol: {
+        handle: vi.fn(),
+        unhandle: vi.fn(),
+      },
+    } as unknown as Electron.Session;
+
+    const renderer = createRendererProtocol({ directory });
+    renderer.register(partition);
+    renderer.unregister(partition);
+
+    expect(partition.protocol.handle).toHaveBeenCalledWith("app", expect.any(Function));
+    expect(partition.protocol.unhandle).toHaveBeenCalledWith("app");
+    expect(electron.protocol.handle).not.toHaveBeenCalled();
+    expect(electron.protocol.unhandle).not.toHaveBeenCalled();
   });
 
   it("unregisters through the underlying protocol module", () => {

@@ -65,7 +65,7 @@
     "vitest": "^4.1.10"
   },
   "peerDependencies": {
-    "electron": ">=20.0.0"
+    "electron": ">=25.0.0"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -5,6 +5,7 @@ A hardened custom protocol for serving a built Electron renderer bundle, in plac
 - **Confined to one directory.** Every request is resolved and checked against the bundle directory: encoded traversal (`%2e%2e`), encoded separators (`%2f`, `%5c`), null bytes, and literal backslashes are all rejected before touching the filesystem.
 - **Locked-down by default.** Ships a strict `Content-Security-Policy` (`default-src 'self'`, no `object-src`, no `frame-ancestors`) and `X-Content-Type-Options: nosniff` on every response. Only `GET`/`HEAD` are accepted; anything else is `405`.
 - **SPA-aware.** Falls back to `index.html` (configurable) for routes that don't map to a file, without ever falling back for a request that has a file extension and is genuinely missing.
+- **Streamed by the platform.** Bodies are served by Chromium's own `file:` loader through `net.fetch`, so `Content-Length`, `Last-Modified`, and byte ranges work for media and large assets without ever buffering a whole file into the main process.
 - **Origin-strict.** Rejects requests whose scheme, host, or userinfo don't match exactly, so nothing else can be reached through the registered origin.
 
 ## Why not `file://` or `loadFile()`?
@@ -17,7 +18,7 @@ Loading a packaged renderer from `file://` gives it a `null` origin and disables
 pnpm add electron-renderer-protocol
 ```
 
-`electron` is a peer dependency; this package targets Electron 20 and later (`protocol.handle`).
+`electron` is a peer dependency; this package targets Electron 25 and later, the release that introduced `protocol.handle`.
 
 ## Usage
 
@@ -68,9 +69,24 @@ default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img
 Returns a `RendererProtocol`:
 
 - `scheme`, `host`, `url` — the registered origin, e.g. `"app://bundle/"`.
-- `customScheme` — pass to `protocol.registerSchemesAsPrivileged` before the app is ready.
-- `register()` — attach the handler via `protocol.handle`. Call after `app.whenReady()`.
-- `unregister()` — detach the handler via `protocol.unhandle`. Call on shutdown.
+- `customScheme` — pass to `protocol.registerSchemesAsPrivileged` before the app is ready. It declares the scheme as standard, secure, fetchable, CORS-enabled, and code-cached, so Chromium keeps compiled JavaScript for the bundle across launches.
+- `register(session?)` — attach the handler via `protocol.handle`. Call after `app.whenReady()`. Registers on the default session unless a `Session` is passed.
+- `unregister(session?)` — detach the handler via `protocol.unhandle`. Call on shutdown, with the session it was registered on.
+
+### Sessions and partitions
+
+Electron protocol handlers are per-session. A window created with a `partition` reaches a different session than the default one, so the protocol has to be registered there too:
+
+```ts
+import { session } from "electron";
+
+const account = session.fromPartition("persist:account-a");
+renderer.register(account);
+
+const window = new BrowserWindow({ webPreferences: { partition: "persist:account-a" } });
+```
+
+A `Session` is taken rather than a partition string so the lifetime of the session stays the caller's, and the same protocol can be registered on as many sessions as the app has.
 
 ### `resolveRendererPath(directory, encodedPathname, fallback?)`
 
