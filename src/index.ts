@@ -1,6 +1,7 @@
-import { protocol } from "electron";
-import { readFile } from "node:fs/promises";
+import { net, protocol } from "electron";
+import { stat } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const MIME_TYPES: Readonly<Record<string, string>> = {
   ".css": "text/css; charset=utf-8",
@@ -89,12 +90,26 @@ export function resolveRendererPath(
   return { ok: true, file, requested };
 }
 
-function responseHeaders(file: string, contentSecurityPolicy: string): HeadersInit {
-  return {
-    "content-security-policy": contentSecurityPolicy,
-    "content-type": MIME_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
-    "x-content-type-options": "nosniff",
-  };
+async function isFile(file: string): Promise<boolean> {
+  try {
+    return (await stat(file)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function withSecurityHeaders(
+  headers: Headers,
+  file: string,
+  contentSecurityPolicy: string,
+): Headers {
+  headers.set("content-security-policy", contentSecurityPolicy);
+  headers.set(
+    "content-type",
+    MIME_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
+  );
+  headers.set("x-content-type-options", "nosniff");
+  return headers;
 }
 
 /**
@@ -102,6 +117,10 @@ function responseHeaders(file: string, contentSecurityPolicy: string): HeadersIn
  * renderer bundle from disk: confined to `directory`, GET/HEAD only, a
  * locked-down Content-Security-Policy by default, and an SPA fallback for
  * routes that don't map to a file.
+ *
+ * Bodies are streamed by Chromium's own `file:` loader through `net.fetch`, so
+ * byte ranges, `Content-Length` and `Last-Modified` come from the platform
+ * instead of being reimplemented here.
  */
 export function createRendererProtocol(options: RendererProtocolOptions): RendererProtocol {
   const scheme = validProtocolPart(options.scheme ?? "app", "scheme");
@@ -133,25 +152,29 @@ export function createRendererProtocol(options: RendererProtocolOptions): Render
       return new Response(result.status === 400 ? "Bad request" : "Forbidden", result);
 
     let file = result.file;
-    let data: Uint8Array;
-    try {
-      data = await readFile(file);
-    } catch {
+    if (!(await isFile(file))) {
       if (extname(result.requested)) return new Response("Not found", { status: 404 });
       file = fallbackFile;
-      try {
-        data = await readFile(file);
-      } catch {
-        return new Response("Not found", { status: 404 });
-      }
+      if (!(await isFile(file))) return new Response("Not found", { status: 404 });
     }
 
-    const body = new Uint8Array(data.byteLength);
-    body.set(data);
-    return new Response(request.method === "HEAD" ? null : body.buffer, {
-      status: 200,
-      headers: responseHeaders(file, contentSecurityPolicy),
-    });
+    // Request headers are forwarded so Range requests reach the file loader.
+    // The session is irrelevant for `file:` URLs (no cookies, cache or proxy),
+    // so the default session's net.fetch is used regardless of where this
+    // protocol was registered.
+    let response: Response;
+    try {
+      response = await net.fetch(pathToFileURL(file).href, { headers: request.headers });
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const headers = withSecurityHeaders(new Headers(response.headers), file, contentSecurityPolicy);
+    if (request.method === "HEAD") {
+      await response.body?.cancel();
+      return new Response(null, { status: response.status, headers });
+    }
+    return new Response(response.body, { status: response.status, headers });
   };
 
   return {

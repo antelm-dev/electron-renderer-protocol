@@ -5,6 +5,7 @@ A hardened custom protocol for serving a built Electron renderer bundle, in plac
 - **Confined to one directory.** Every request is resolved and checked against the bundle directory: encoded traversal (`%2e%2e`), encoded separators (`%2f`, `%5c`), null bytes, and literal backslashes are all rejected before touching the filesystem.
 - **Locked-down by default.** Ships a strict `Content-Security-Policy` (`default-src 'self'`, no `object-src`, no `frame-ancestors`) and `X-Content-Type-Options: nosniff` on every response. Only `GET`/`HEAD` are accepted; anything else is `405`.
 - **SPA-aware.** Falls back to `index.html` (configurable) for routes that don't map to a file, without ever falling back for a request that has a file extension and is genuinely missing.
+- **Streamed by the platform.** Bodies are served by Chromium's own `file:` loader through `net.fetch`, so `Content-Length`, `Last-Modified`, and byte ranges work for media and large assets without ever buffering a whole file into the main process.
 - **Origin-strict.** Rejects requests whose scheme, host, or userinfo don't match exactly, so nothing else can be reached through the registered origin.
 
 ## Why not `file://` or `loadFile()`?
