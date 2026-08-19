@@ -69,7 +69,7 @@ default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img
 Returns a `RendererProtocol`:
 
 - `scheme`, `host`, `url` — the registered origin, e.g. `"app://bundle/"`.
-- `customScheme` — pass to `protocol.registerSchemesAsPrivileged` before the app is ready.
+- `customScheme` — pass to `protocol.registerSchemesAsPrivileged` before the app is ready. It declares the scheme as standard, secure, fetchable, CORS-enabled, and code-cached, so Chromium keeps compiled JavaScript for the bundle across launches.
 - `register()` — attach the handler via `protocol.handle`. Call after `app.whenReady()`.
 - `unregister()` — detach the handler via `protocol.unhandle`. Call on shutdown.
 

@@ -198,6 +198,7 @@ describe("renderer protocol", () => {
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
+        codeCache: true,
       },
     });
   });

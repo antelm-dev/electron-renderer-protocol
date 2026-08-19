@@ -188,6 +188,10 @@ export function createRendererProtocol(options: RendererProtocolOptions): Render
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
+        // Chromium only caches compiled JS for custom schemes when codeCache
+        // and standard are both set, which is most of this scheme's startup
+        // cost on a large renderer bundle.
+        codeCache: true,
       },
     },
     register: () => protocol.handle(scheme, handler),
