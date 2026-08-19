@@ -74,6 +74,11 @@ describe("renderer protocol", () => {
       status: 400,
     });
     expect(resolveRendererPath(directory, "/bad%zz")).toEqual({ ok: false, status: 400 });
+    expect(resolveRendererPath(directory, "/%00secret")).toEqual({ ok: false, status: 400 });
+    expect(resolveRendererPath(directory, String.raw`/assets\app.js`)).toEqual({
+      ok: false,
+      status: 400,
+    });
   });
 
   it("serves assets, falls back for SPA routes, and never falls back for missing files", async () => {
@@ -200,6 +205,16 @@ describe("renderer protocol", () => {
         codeCache: true,
       },
     });
+  });
+
+  it("answers 404 when the file exists but the platform cannot read it", async () => {
+    const renderer = createRendererProtocol({ directory });
+    renderer.register();
+    const handle = electron.handler!;
+    electron.net.fetch.mockRejectedValueOnce(new Error("EACCES"));
+
+    const response = await handle(new Request("app://bundle/index.html"));
+    expect(response.status).toBe(404);
   });
 
   it("registers on a given session instead of the default one", async () => {
