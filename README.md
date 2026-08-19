@@ -17,7 +17,7 @@ Loading a packaged renderer from `file://` gives it a `null` origin and disables
 pnpm add electron-renderer-protocol
 ```
 
-`electron` is a peer dependency; this package targets Electron 20 and later (`protocol.handle`).
+`electron` is a peer dependency; this package targets Electron 25 and later, the release that introduced `protocol.handle`.
 
 ## Usage
 
