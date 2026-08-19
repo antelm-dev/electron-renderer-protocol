@@ -42,8 +42,10 @@ export interface RendererProtocol {
   readonly host: string;
   readonly url: string;
   readonly customScheme: Electron.CustomScheme;
-  register(): void;
-  unregister(): void;
+  /** Attach the handler, on the default session unless one is given. */
+  register(session?: Electron.Session): void;
+  /** Detach the handler. Pass the session it was registered on. */
+  unregister(session?: Electron.Session): void;
 }
 
 export type RendererPathResult =
@@ -194,7 +196,7 @@ export function createRendererProtocol(options: RendererProtocolOptions): Render
         codeCache: true,
       },
     },
-    register: () => protocol.handle(scheme, handler),
-    unregister: () => protocol.unhandle(scheme),
+    register: (session) => (session?.protocol ?? protocol).handle(scheme, handler),
+    unregister: (session) => (session?.protocol ?? protocol).unhandle(scheme),
   };
 }

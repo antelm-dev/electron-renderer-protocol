@@ -54,7 +54,6 @@ describe("renderer protocol", () => {
     await writeFile(join(directory, "index.html"), "<h1>app</h1>");
     await writeFile(join(directory, "assets", "app.js"), "console.log('app')");
     electron.handler = undefined;
-    electron.net.fetch.mockClear();
   });
 
   afterEach(async () => {
@@ -201,6 +200,24 @@ describe("renderer protocol", () => {
         codeCache: true,
       },
     });
+  });
+
+  it("registers on a given session instead of the default one", async () => {
+    const partition = {
+      protocol: {
+        handle: vi.fn(),
+        unhandle: vi.fn(),
+      },
+    } as unknown as Electron.Session;
+
+    const renderer = createRendererProtocol({ directory });
+    renderer.register(partition);
+    renderer.unregister(partition);
+
+    expect(partition.protocol.handle).toHaveBeenCalledWith("app", expect.any(Function));
+    expect(partition.protocol.unhandle).toHaveBeenCalledWith("app");
+    expect(electron.protocol.handle).not.toHaveBeenCalled();
+    expect(electron.protocol.unhandle).not.toHaveBeenCalled();
   });
 
   it("unregisters through the underlying protocol module", () => {

@@ -70,8 +70,23 @@ Returns a `RendererProtocol`:
 
 - `scheme`, `host`, `url` — the registered origin, e.g. `"app://bundle/"`.
 - `customScheme` — pass to `protocol.registerSchemesAsPrivileged` before the app is ready. It declares the scheme as standard, secure, fetchable, CORS-enabled, and code-cached, so Chromium keeps compiled JavaScript for the bundle across launches.
-- `register()` — attach the handler via `protocol.handle`. Call after `app.whenReady()`.
-- `unregister()` — detach the handler via `protocol.unhandle`. Call on shutdown.
+- `register(session?)` — attach the handler via `protocol.handle`. Call after `app.whenReady()`. Registers on the default session unless a `Session` is passed.
+- `unregister(session?)` — detach the handler via `protocol.unhandle`. Call on shutdown, with the session it was registered on.
+
+### Sessions and partitions
+
+Electron protocol handlers are per-session. A window created with a `partition` reaches a different session than the default one, so the protocol has to be registered there too:
+
+```ts
+import { session } from "electron";
+
+const account = session.fromPartition("persist:account-a");
+renderer.register(account);
+
+const window = new BrowserWindow({ webPreferences: { partition: "persist:account-a" } });
+```
+
+A `Session` is taken rather than a partition string so the lifetime of the session stays the caller's, and the same protocol can be registered on as many sessions as the app has.
 
 ### `resolveRendererPath(directory, encodedPathname, fallback?)`
 
