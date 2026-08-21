@@ -55,14 +55,14 @@
     "@arethetypeswrong/cli": "0.18.5",
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
-    "@types/node": "^24.10.0",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@types/node": "^26.2.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "electron": "^43.4.0",
-    "oxfmt": "^0.62.0",
-    "oxlint": "^1.72.0",
+    "oxfmt": "^0.64.0",
+    "oxlint": "^1.79.0",
     "publint": "0.3.23",
-    "typescript": "~6.0.3",
-    "vitest": "^4.1.10"
+    "typescript": "~7.0.2",
+    "vitest": "^4.1.11"
   },
   "peerDependencies": {
     "electron": ">=25.0.0"
